@@ -12,8 +12,13 @@ jobs:
   mirror:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
 
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
@@ -167,4 +172,5 @@ jobs:
           cp -r playwright-output/. gallery-download/ 2>/dev/null || true
           git add gallery-download/
           git diff --staged --quiet || git commit -m "Add mirrored gallery images [skip ci]"
+          git pull --rebase origin main || true
           git push origin main
