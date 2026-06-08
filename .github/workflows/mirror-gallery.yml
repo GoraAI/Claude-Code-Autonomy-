@@ -80,12 +80,20 @@ jobs:
               }
             });
 
-            await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+            // Use 'load' not 'networkidle' — Pixieset keeps background requests open forever
+            try {
+              await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+            } catch (e) {
+              console.log('goto warning:', e.message, '— continuing anyway');
+            }
+
+            // Extra wait for JS rendering
+            await page.waitForTimeout(5000);
 
             // Scroll to trigger lazy loading
-            for (let i = 0; i < 10; i++) {
+            for (let i = 0; i < 15; i++) {
               await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-              await page.waitForTimeout(1000);
+              await page.waitForTimeout(1500);
             }
 
             // Grab all img src attributes
