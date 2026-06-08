@@ -1,0 +1,150 @@
+name: Mirror Pixieset Gallery
+
+on:
+  workflow_dispatch:
+    inputs:
+      gallery_url:
+        description: 'Pixieset gallery URL to mirror'
+        required: true
+        default: 'https://seviltopbasphotography.pixieset.com/marylynsmaternityphotoshoot/'
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y httrack wget curl
+
+      - name: Install Node & Playwright
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright
+        run: |
+          npm install -g playwright
+          npx playwright install --with-deps chromium
+
+      - name: Try HTTrack first
+        run: |
+          mkdir -p gallery-mirror
+          httrack "${{ github.event.inputs.gallery_url }}" \
+            -O ./gallery-mirror \
+            -F "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+            --mirror --depth=5 -%e0 || true
+          echo "HTTrack done. Files:"
+          find gallery-mirror -type f | head -30
+
+      - name: Use Playwright to scrape gallery (JS-rendered)
+        run: |
+          cat > scrape.js << 'SCRIPT'
+          const { chromium } = require('playwright');
+          const fs = require('fs');
+          const path = require('path');
+          const https = require('https');
+          const http = require('http');
+
+          function download(url, dest) {
+            return new Promise((resolve, reject) => {
+              const proto = url.startsWith('https') ? https : http;
+              const file = fs.createWriteStream(dest);
+              proto.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
+                if (res.statusCode === 301 || res.statusCode === 302) {
+                  file.close();
+                  download(res.headers.location, dest).then(resolve).catch(reject);
+                  return;
+                }
+                res.pipe(file);
+                file.on('finish', () => { file.close(); resolve(); });
+              }).on('error', err => { fs.unlink(dest, () => {}); reject(err); });
+            });
+          }
+
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            const page = await browser.newPage();
+
+            const url = process.argv[2] || 'https://seviltopbasphotography.pixieset.com/marylynsmaternityphotoshoot/';
+            console.log('Navigating to:', url);
+
+            const imageUrls = new Set();
+
+            page.on('response', async response => {
+              const resUrl = response.url();
+              if (resUrl.match(/\.(jpg|jpeg|png|webp|gif)/i) && response.status() === 200) {
+                imageUrls.add(resUrl);
+              }
+            });
+
+            await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+
+            // Scroll to trigger lazy loading
+            for (let i = 0; i < 10; i++) {
+              await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+              await page.waitForTimeout(1000);
+            }
+
+            // Grab all img src attributes
+            const imgSrcs = await page.evaluate(() =>
+              Array.from(document.querySelectorAll('img')).map(img => img.src)
+            );
+            imgSrcs.forEach(s => { if (s && s.startsWith('http')) imageUrls.add(s); });
+
+            // Save HTML
+            const html = await page.content();
+            const title = await page.title();
+            fs.mkdirSync('playwright-output', { recursive: true });
+            fs.writeFileSync('playwright-output/index.html', html);
+            console.log(`Page title: ${title}`);
+            console.log(`Found ${imageUrls.size} images`);
+
+            // Download all images
+            fs.mkdirSync('playwright-output/images', { recursive: true });
+            let i = 0;
+            for (const imgUrl of imageUrls) {
+              try {
+                const ext = path.extname(new URL(imgUrl).pathname) || '.jpg';
+                const dest = `playwright-output/images/image_${++i}${ext}`;
+                await download(imgUrl, dest);
+                console.log(`Downloaded: ${imgUrl}`);
+              } catch (e) {
+                console.log(`Failed: ${imgUrl} - ${e.message}`);
+              }
+            }
+
+            // Save image URL list
+            fs.writeFileSync('playwright-output/image-urls.txt', [...imageUrls].join('\n'));
+            console.log('Done!');
+            await browser.close();
+          })();
+          SCRIPT
+          node scrape.js "${{ github.event.inputs.gallery_url }}" || true
+
+      - name: List downloaded files
+        run: |
+          echo "=== Gallery Mirror ==="
+          find gallery-mirror -type f | head -50
+          echo ""
+          echo "=== Playwright Output ==="
+          find playwright-output -type f | head -50
+          echo ""
+          echo "=== Image URLs found ==="
+          cat playwright-output/image-urls.txt 2>/dev/null || echo "none"
+
+      - name: Upload gallery mirror as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gallery-mirror
+          path: gallery-mirror/
+          retention-days: 7
+
+      - name: Upload Playwright output as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-gallery
+          path: playwright-output/
+          retention-days: 7
