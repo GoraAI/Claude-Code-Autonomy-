@@ -158,3 +158,13 @@ jobs:
           name: playwright-gallery
           path: playwright-output/
           retention-days: 7
+
+      - name: Commit gallery images to repo
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          mkdir -p gallery-download
+          cp -r playwright-output/. gallery-download/ 2>/dev/null || true
+          git add gallery-download/
+          git diff --staged --quiet || git commit -m "Add mirrored gallery images [skip ci]"
+          git push origin main
