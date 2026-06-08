@@ -26,7 +26,7 @@ jobs:
 
       - name: Install Playwright
         run: |
-          npm install playwright
+          npm install playwright playwright-extra puppeteer-extra-plugin-stealth
           npx playwright install --with-deps chromium
 
       - name: Try HTTrack first
@@ -42,7 +42,9 @@ jobs:
       - name: Use Playwright to scrape gallery (JS-rendered)
         run: |
           cat > scrape.js << 'SCRIPT'
-          const { chromium } = require('playwright');
+          const { chromium } = require('playwright-extra');
+          const stealth = require('puppeteer-extra-plugin-stealth');
+          chromium.use(stealth());
           const fs = require('fs');
           const path = require('path');
           const https = require('https');
